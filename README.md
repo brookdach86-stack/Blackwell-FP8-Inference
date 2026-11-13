@@ -1,18 +1,26 @@
 ![Original Work](https://img.shields.io/badge/Original-Wain-brightgreen)
 ![GPG Signed](https://img.shields.io/badge/GPG-Signed-brightgreen)
 ![License Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-blue)
+![Target HW](https://img.shields.io/badge/Target%20HW-RTX%205060%20Laptop%20(sm_120%2C26SM%2C32MB%20L2)-brightgreen)
+![E4M3 FP8](https://img.shields.io/badge/FP8-E4M3FN%20Native%20Support-orange)
 
 ---
 
-<!--
-@Author: Wain (brookdach86-stack@users.noreply.github.com)
-@GitHub: https://github.com/brookdach86-stack
-@Note: 本内容为原创，转载请注明来源。基于学习路径迭代：CSAPP Lab → CUDA Kernel → Triton → LLM Inference
--->
-
 # Blackwell FP8 Inference
 
-End-to-end FP8 optimization pipeline for LLM inference, from FP8 quantization and FlashAttention/PagedAttention kernels to multi-GPU Tensor Parallel composition. Built on Triton and PyTorch distributed — no vLLM or TensorRT-LLM dependency.
+不用vLLM、不用TensorRT-LLM，从FP8量化到PagedAttention到Tensor Parallel，全栈自己写的推理引擎雏形。Triton + PyTorch distributed，Windows上gloo backend绕过NCCL限制。
+
+**硬货**——per-page+per-head的scale粒度设计：
+
+- per-tensor scale（全tensor一个scale）→ 简单但精度差，小值被截断
+- per-channel scale（每个head一个scale）→ 精度好但scale要额外加载，每个head多一次global read
+- **我选的per-page+per-head** → 刚好绑Paged KV Cache的page粒度（`k_scale = [num_pages, H]`），scale和page一起加载，没有额外索引开销。量化精度损失0.47%（远低于工业界1%阈值），scale加载开销≈0
+
+踩过的坑：
+
+- Windows上torchrun的libuv打包bug→自己写multiprocessing launcher（`launch_dist_ops.py`）绕过去
+- gloo backend不支持CUDA tensor→AllGather/AllReduce之前要先搬CPU
+- Tensor Parallel的AllGather时机→一开始放在attention内部，每个query都要gather，改成head维度切分，每个head只处理自己的部分，省掉跨GPU通信
 
 ## Modules
 
