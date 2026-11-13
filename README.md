@@ -8,19 +8,15 @@
 
 # Blackwell FP8 Inference
 
-不用vLLM、不用TensorRT-LLM，从FP8量化到PagedAttention到Tensor Parallel，全栈自己写的推理引擎雏形。Triton + PyTorch distributed，Windows上gloo backend绕过NCCL限制。
+No vLLM, no TensorRT-LLM — built a full inference engine prototype from scratch: FP8 quantization + PagedAttention + Tensor Parallel. Triton + PyTorch distributed. Bypassed NCCL on Windows with gloo backend + custom multiprocessing launcher.
 
-**硬货**——per-page+per-head的scale粒度设计：
+**Key design**: per-page+per-head scale granularity — not per-tensor (too lossy) and not per-channel (extra global read per head). This exactly binds to Paged KV Cache's page granularity (`k_scale = [num_pages, H]`) — scale loads together with the page, zero extra indexing overhead. Quantization error 0.47% (well below industry's 1% threshold), scale overhead ≈ 0.
 
-- per-tensor scale（全tensor一个scale）→ 简单但精度差，小值被截断
-- per-channel scale（每个head一个scale）→ 精度好但scale要额外加载，每个head多一次global read
-- **我选的per-page+per-head** → 刚好绑Paged KV Cache的page粒度（`k_scale = [num_pages, H]`），scale和page一起加载，没有额外索引开销。量化精度损失0.47%（远低于工业界1%阈值），scale加载开销≈0
+Pitfalls:
 
-踩过的坑：
-
-- Windows上torchrun的libuv打包bug→自己写multiprocessing launcher（`launch_dist_ops.py`）绕过去
-- gloo backend不支持CUDA tensor→AllGather/AllReduce之前要先搬CPU
-- Tensor Parallel的AllGather时机→一开始放在attention内部，每个query都要gather，改成head维度切分，每个head只处理自己的部分，省掉跨GPU通信
+- Windows torchrun libuv packaging bug → wrote my own multiprocessing launcher (`launch_dist_ops.py`)
+- gloo backend doesn't handle CUDA tensors → must move to CPU before AllGather/AllReduce
+- Tensor Parallel AllGather placement — initially inside attention (gather per query), switched to head-dimension split (each head handles its own slice, no cross-GPU comm during attention)
 
 ## Modules
 
